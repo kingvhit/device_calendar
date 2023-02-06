@@ -182,6 +182,9 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
                 createCalendar(call, result)
             case deleteCalendarMethod:
                 deleteCalendar(call, result)
+            case showEventModalMethod:
+                self.flutterResult = result
+                showEventModal(call, result)
             default:
                 result(FlutterMethodNotImplemented)
             }
