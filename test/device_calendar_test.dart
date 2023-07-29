@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:device_calendar/device_calendar.dart';
 import 'package:device_calendar/src/common/error_codes.dart';
 import 'package:flutter/services.dart';
