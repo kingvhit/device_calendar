@@ -4,6 +4,14 @@ import Flutter
 import Foundation
 import UIKit
 
+class EventStoreManager: ObservableObject {
+    static let shared = EventStoreManager()
+    let eventStore: EKEventStore
+    private init() {
+        eventStore = EKEventStore()
+    }
+}
+
 extension Date {
     var millisecondsSinceEpoch: Double { return self.timeIntervalSince1970 * 1000.0 }
 }
@@ -102,7 +110,7 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
     let calendarNotFoundErrorMessageFormat = "The calendar with the ID %@ could not be found"
     let calendarReadOnlyErrorMessageFormat = "Calendar with ID %@ is read-only"
     let eventNotFoundErrorMessageFormat = "The event with the ID %@ could not be found"
-    let eventStore = EKEventStore()
+    let eventStore = EventStoreManager.shared.eventStore
     let requestPermissionsMethod = "requestPermissions"
     let hasPermissionsMethod = "hasPermissions"
     let retrieveCalendarsMethod = "retrieveCalendars"
@@ -325,11 +333,36 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
                     let endDate = Date (timeIntervalSince1970: endDateDateMillisecondsSinceEpoch!.doubleValue / 1000.0)
                     let ekCalendar = self.eventStore.calendar(withIdentifier: calendarId)
                     if ekCalendar != nil {
-                        let predicate = self.eventStore.predicateForEvents(
-                            withStart: startDate,
-                            end: endDate,
-                            calendars: [ekCalendar!])
-                        let ekEvents = self.eventStore.events(matching: predicate)
+                        var ekEvents = [EKEvent]()
+                        let fourYearsInSeconds = 4 * 365 * 24 * 60 * 60
+                        let fourYearsTimeInterval = TimeInterval(fourYearsInSeconds)
+                        var currentStartDate = startDate
+                        // Adding 4 years to the start date
+                        var currentEndDate = startDate.addingTimeInterval(fourYearsTimeInterval)
+                        while currentEndDate <= endDate {
+                            let predicate = self.eventStore.predicateForEvents(
+                                withStart: currentStartDate,
+                                end: currentEndDate.addingTimeInterval(-1),
+                                calendars: [ekCalendar!])
+                            let batch = self.eventStore.events(matching: predicate)
+                            ekEvents.append(contentsOf: batch)
+
+                            // Move the start and end dates forward by the [fourYearsTimeInterval]
+                            currentStartDate = currentEndDate
+                            currentEndDate = currentStartDate.addingTimeInterval(fourYearsTimeInterval)
+                        }
+
+                        // If the cycle doesn't end exactly on the end date
+                        if currentStartDate <= endDate {
+                            let predicate = self.eventStore.predicateForEvents(
+                                withStart: currentStartDate,
+                                end: endDate,
+                                calendars: [ekCalendar!])
+                            let batch = self.eventStore.events(matching: predicate)
+                            ekEvents.append(contentsOf: batch)
+                        }
+
+
                         for ekEvent in ekEvents {
                             let event = createEventFromEkEvent(calendarId: calendarId, ekEvent: ekEvent)
                             events.append(event)
@@ -1032,15 +1065,27 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
             completion(true)
             return
         }
-        eventStore.requestAccess(to: .event, completion: {
-            (accessGranted: Bool, _: Error?) in
-            completion(accessGranted)
-        })
+        if #available(iOS 17, *) {
+            eventStore.requestFullAccessToEvents {
+                (accessGranted: Bool, _: Error?) in
+                completion(accessGranted)
+            }
+        } else {
+            eventStore.requestAccess(to: .event, completion: {
+                (accessGranted: Bool, _: Error?) in
+                completion(accessGranted)
+            })
+        }
+
     }
 
     private func hasEventPermissions() -> Bool {
         let status = EKEventStore.authorizationStatus(for: .event)
-        return status == EKAuthorizationStatus.authorized
+        if #available(iOS 17, *) {
+            return status == EKAuthorizationStatus.fullAccess
+        } else {
+            return status == EKAuthorizationStatus.authorized
+        }
     }
 }
 
