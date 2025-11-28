@@ -98,6 +98,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 RETRIEVE_CALENDARS_REQUEST_CODE -> {
                     retrieveCalendars(cachedValues.pendingChannelResult)
                 }
+
                 RETRIEVE_EVENTS_REQUEST_CODE -> {
                     retrieveEvents(
                         cachedValues.calendarId,
@@ -107,9 +108,11 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                         cachedValues.pendingChannelResult
                     )
                 }
+
                 RETRIEVE_CALENDAR_REQUEST_CODE -> {
                     retrieveCalendar(cachedValues.calendarId, cachedValues.pendingChannelResult)
                 }
+
                 CREATE_OR_UPDATE_EVENT_REQUEST_CODE -> {
                     createOrUpdateEvent(
                         cachedValues.calendarId,
@@ -117,6 +120,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                         cachedValues.pendingChannelResult
                     )
                 }
+
                 DELETE_EVENT_REQUEST_CODE -> {
                     deleteEvent(
                         cachedValues.calendarId,
@@ -124,9 +128,11 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                         cachedValues.pendingChannelResult
                     )
                 }
+
                 REQUEST_PERMISSIONS_REQUEST_CODE -> {
                     finishWithSuccess(permissionGranted, cachedValues.pendingChannelResult)
                 }
+
                 DELETE_CALENDAR_REQUEST_CODE -> {
                     deleteCalendar(cachedValues.calendarId, cachedValues.pendingChannelResult)
                 }
@@ -865,8 +871,10 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
 
     private fun arePermissionsGranted(): Boolean {
         if (atLeastAPI(23) && _binding != null) {
-            val writeCalendarPermissionGranted = _binding!!.activity.checkSelfPermission(Manifest.permission.WRITE_CALENDAR) == PackageManager.PERMISSION_GRANTED
-            val readCalendarPermissionGranted = _binding!!.activity.checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
+            val writeCalendarPermissionGranted =
+                _binding!!.activity.checkSelfPermission(Manifest.permission.WRITE_CALENDAR) == PackageManager.PERMISSION_GRANTED
+            val readCalendarPermissionGranted =
+                _binding!!.activity.checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
             return writeCalendarPermissionGranted && readCalendarPermissionGranted
         }
 
@@ -1067,7 +1075,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             Events.CAL_ACCESS_ROOT,
             Events.CAL_ACCESS_OWNER,
             Events.CAL_ACCESS_EDITOR
-            -> false
+                -> false
+
             else -> true
         }
     }
@@ -1256,7 +1265,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         else -> null
     }
 
-    private fun parseEventStatus(status: Int): EventStatus? = when(status) {
+    private fun parseEventStatus(status: Int): EventStatus? = when (status) {
         Events.STATUS_CONFIRMED -> EventStatus.CONFIRMED
         Events.STATUS_CANCELED -> EventStatus.CANCELED
         Events.STATUS_TENTATIVE -> EventStatus.TENTATIVE
