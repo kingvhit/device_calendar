@@ -107,6 +107,9 @@ public class DeviceCalendarPlugin: NSObject, FlutterPlugin  {
     let hasPermissionsMethod = "hasPermissions"
     let retrieveCalendarsMethod = "retrieveCalendars"
     let retrieveEventsMethod = "retrieveEvents"
+    /// Batched multi-calendar variant — see iOS plugin for the kdoc; macOS
+    /// uses the same EKEventStore predicate API.
+    let retrieveEventsForCalendarsMethod = "retrieveEventsForCalendars"
     let retrieveSourcesMethod = "retrieveSources"
     let createOrUpdateEventMethod = "createOrUpdateEvent"
     let createCalendarMethod = "createCalendar"
@@ -115,6 +118,7 @@ public class DeviceCalendarPlugin: NSObject, FlutterPlugin  {
     let deleteEventInstanceMethod = "deleteEventInstance"
     let showEventModalMethod = "showiOSEventModal"
     let calendarIdArgument = "calendarId"
+    let calendarIdsArgument = "calendarIds"
     let startDateArgument = "startDate"
     let endDateArgument = "endDate"
     let eventIdArgument = "eventId"
@@ -172,6 +176,8 @@ public class DeviceCalendarPlugin: NSObject, FlutterPlugin  {
                 retrieveCalendars(result)
             case retrieveEventsMethod:
                 retrieveEvents(call, result)
+            case retrieveEventsForCalendarsMethod:
+                retrieveEventsForCalendars(call, result)
             case createOrUpdateEventMethod:
                 createOrUpdateEvent(call, result)
             case deleteEventMethod:
@@ -359,6 +365,52 @@ public class DeviceCalendarPlugin: NSObject, FlutterPlugin  {
                 events.append(event)
             }
 
+            self.encodeJsonAndFinish(codable: events, result: result)
+        }, result: result)
+    }
+
+    /// Batched multi-calendar event read. See iOS plugin for full kdoc —
+    /// macOS uses the same `EKEventStore.predicateForEvents(...)` API with an
+    /// `[EKCalendar]` array. macOS doesn't have the same 4-year predicate
+    /// limit as iOS so we don't bother chunking.
+    private func retrieveEventsForCalendars(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+        checkPermissionsThenExecute(permissionsGrantedAction: {
+            let arguments = call.arguments as! Dictionary<String, AnyObject>
+            let calendarIds = arguments[self.calendarIdsArgument] as? [String] ?? []
+            let startDateMs = arguments[self.startDateArgument] as? NSNumber
+            let endDateMs = arguments[self.endDateArgument] as? NSNumber
+            let eventIdArgs = arguments[self.eventIdsArgument] as? [String]
+
+            if calendarIds.isEmpty {
+                self.encodeJsonAndFinish(codable: [Event](), result: result)
+                return
+            }
+            let ekCalendars: [EKCalendar] = calendarIds.compactMap {
+                self.eventStore.calendar(withIdentifier: $0)
+            }
+            if ekCalendars.isEmpty {
+                self.encodeJsonAndFinish(codable: [Event](), result: result)
+                return
+            }
+
+            var events = [Event]()
+            let specifiedStartEndDates = startDateMs != nil && endDateMs != nil
+            if specifiedStartEndDates {
+                let startDate = Date(timeIntervalSince1970: startDateMs!.doubleValue / 1000.0)
+                let endDate = Date(timeIntervalSince1970: endDateMs!.doubleValue / 1000.0)
+                let predicate = self.eventStore.predicateForEvents(
+                    withStart: startDate,
+                    end: endDate,
+                    calendars: ekCalendars)
+                let ekEvents = self.eventStore.events(matching: predicate)
+                for ekEvent in ekEvents {
+                    let cid = ekEvent.calendar.calendarIdentifier
+                    events.append(self.createEventFromEkEvent(calendarId: cid, ekEvent: ekEvent))
+                }
+            }
+            if let eventIds = eventIdArgs, !eventIds.isEmpty {
+                events = events.filter { eventIds.contains($0.eventId) }
+            }
             self.encodeJsonAndFinish(codable: events, result: result)
         }, result: result)
     }

@@ -453,6 +453,118 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         return
     }
 
+    /// Batched multi-calendar event read.
+    ///
+    /// Differs from [retrieveEvents] in three ways:
+    ///   1. SQLite `WHERE CALENDAR_ID IN (id1, id2, …)` clause — one
+    ///      content-provider scan instead of N parallel ones.
+    ///   2. Projection augmented with `Instances.CALENDAR_ID` so we can
+    ///      attribute each row back to its source calendar (the per-calendar
+    ///      [retrieveEvents] takes calendarId as a static caller arg, which
+    ///      doesn't work when results are mixed).
+    ///   3. **Skips attendee & reminder lookups.** Each event in the original
+    ///      method spawned 2 extra content-provider queries; for swipe-driven
+    ///      reads where the consumer only needs title + date + duration, that
+    ///      multiplied to 400+ queries on a 200-event load. The batched
+    ///      variant is meant for "list / paint" use cases where attendees
+    ///      aren't displayed — fall back to [retrieveEvents] when full
+    ///      detail is needed.
+    fun retrieveEventsForCalendars(
+        calendarIds: List<String>,
+        startDate: Long?,
+        endDate: Long?,
+        eventIds: List<String>,
+        pendingChannelResult: MethodChannel.Result
+    ) {
+        if (startDate == null && endDate == null && eventIds.isEmpty()) {
+            finishWithError(
+                EC.INVALID_ARGUMENT,
+                ErrorMessages.RETRIEVE_EVENTS_ARGUMENTS_NOT_VALID_MESSAGE,
+                pendingChannelResult
+            )
+            return
+        }
+
+        if (calendarIds.isEmpty()) {
+            finishWithSuccess("[]", pendingChannelResult)
+            return
+        }
+
+        if (!arePermissionsGranted()) {
+            // Batched reads can't enqueue a permission request (no single
+            // calendarId to thread through the cache). Caller should call
+            // requestPermissions() upfront — this branch is just defence.
+            finishWithError(
+                EC.NOT_FOUND,
+                "Calendar permission not granted",
+                pendingChannelResult
+            )
+            return
+        }
+
+        // Sanitise IDs — CalendarContract IDs are Long integers. Dropping
+        // anything that doesn't parse defangs the literal SQL interpolation
+        // below (no parameter binding API on ContentResolver.query selection).
+        val sanitizedIds = calendarIds.mapNotNull { it.toLongOrNull() }
+        if (sanitizedIds.isEmpty()) {
+            finishWithSuccess("[]", pendingChannelResult)
+            return
+        }
+        val idsCsv = sanitizedIds.joinToString(",")
+
+        val contentResolver: ContentResolver? = _context?.contentResolver
+        val eventsUriBuilder = CalendarContract.Instances.CONTENT_URI.buildUpon()
+        ContentUris.appendId(eventsUriBuilder, startDate ?: Date(0).time)
+        ContentUris.appendId(eventsUriBuilder, endDate ?: Date(Long.MAX_VALUE).time)
+        val eventsUri = eventsUriBuilder.build()
+
+        val eventsCalendarQuery = "(${Events.CALENDAR_ID} IN ($idsCsv))"
+        val eventsNotDeletedQuery = "(${Events.DELETED} != 1)"
+        val eventsIdsQuery =
+            "(${CalendarContract.Instances.EVENT_ID} IN (${eventIds.joinToString()}))"
+
+        var eventsSelectionQuery = "$eventsCalendarQuery AND $eventsNotDeletedQuery"
+        if (eventIds.isNotEmpty()) {
+            eventsSelectionQuery += " AND ($eventsIdsQuery)"
+        }
+        val eventsSortOrder = Events.DTSTART + " DESC"
+
+        // Augment standard projection with CALENDAR_ID at index = projection.size.
+        val projection = Cst.EVENT_PROJECTION + arrayOf(CalendarContract.Instances.CALENDAR_ID)
+        val calendarIdIdx = Cst.EVENT_PROJECTION.size
+
+        val eventsCursor = contentResolver?.query(
+            eventsUri,
+            projection,
+            eventsSelectionQuery,
+            null,
+            eventsSortOrder
+        )
+
+        val events: MutableList<Event> = mutableListOf()
+        val exceptionHandler = CoroutineExceptionHandler { _, exception ->
+            uiThreadHandler.post {
+                finishWithError(EC.GENERIC_ERROR, exception.message, pendingChannelResult)
+            }
+        }
+
+        GlobalScope.launch(Dispatchers.IO + exceptionHandler) {
+            while (eventsCursor?.moveToNext() == true) {
+                val rowCalendarId = eventsCursor.getLong(calendarIdIdx).toString()
+                val event = parseEvent(rowCalendarId, eventsCursor) ?: continue
+                events.add(event)
+            }
+            // Deliberately skip attendees + reminders here — see kdoc above.
+        }.invokeOnCompletion { cause ->
+            eventsCursor?.close()
+            if (cause == null) {
+                uiThreadHandler.post {
+                    finishWithSuccess(_gson?.toJson(events), pendingChannelResult)
+                }
+            }
+        }
+    }
+
     fun createOrUpdateEvent(
         calendarId: String,
         event: Event?,

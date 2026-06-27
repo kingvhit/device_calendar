@@ -123,6 +123,88 @@ class DeviceCalendarPlugin {
             ));
   }
 
+  /// Batched variant of [retrieveEvents]: fetches events from **multiple**
+  /// calendars in a single platform-channel round-trip.
+  ///
+  /// Native side uses the OS's built-in multi-calendar filter (SQLite
+  /// `IN (...)` clause on Android, `EKEventStore.predicateForEvents(
+  /// calendars: [...])` on iOS / macOS), so the database scans the events
+  /// table exactly once instead of N times.
+  ///
+  /// Use this when the caller would otherwise issue `Future.wait` over many
+  /// single-calendar `retrieveEvents` calls — common pattern for apps that
+  /// merge several calendars into one unified view.
+  ///
+  /// Each returned `Event` carries its source `calendarId`, so the caller
+  /// can split results back per-calendar if needed.
+  ///
+  /// Falls back to per-calendar `retrieveEvents` when the platform-side
+  /// `retrieveEventsForCalendars` handler isn't implemented (older builds
+  /// of this fork, or third-party hosts that haven't updated yet).
+  Future<Result<UnmodifiableListView<Event>>> retrieveEventsForCalendars(
+    List<String> calendarIds,
+    RetrieveEventsParams? retrieveEventsParams,
+  ) async {
+    if (calendarIds.isEmpty) {
+      // Mirror retrieveEvents' Result shape with an empty list — avoids the
+      // caller having to special-case "no calendars selected".
+      return _emptyEventsResult();
+    }
+    try {
+      return await _invokeChannelMethod(
+        ChannelConstants.methodNameRetrieveEventsForCalendars,
+        assertParameters: (Result<UnmodifiableListView<Event>> r) {
+          _assertParameter(
+            r,
+            !((retrieveEventsParams?.eventIds?.isEmpty ?? true) &&
+                ((retrieveEventsParams?.startDate == null ||
+                        retrieveEventsParams?.endDate == null) ||
+                    (retrieveEventsParams?.startDate != null &&
+                        retrieveEventsParams?.endDate != null &&
+                        (retrieveEventsParams != null &&
+                            retrieveEventsParams.startDate!.isAfter(
+                                retrieveEventsParams.endDate!))))),
+            ErrorCodes.invalidArguments,
+            ErrorMessages.invalidRetrieveEventsParams,
+          );
+        },
+        arguments: () => <String, Object?>{
+          ChannelConstants.parameterNameCalendarIds: calendarIds,
+          ChannelConstants.parameterNameStartDate:
+              retrieveEventsParams?.startDate?.millisecondsSinceEpoch,
+          ChannelConstants.parameterNameEndDate:
+              retrieveEventsParams?.endDate?.millisecondsSinceEpoch,
+          ChannelConstants.parameterNameEventIds:
+              retrieveEventsParams?.eventIds,
+        },
+        evaluateResponse: (rawData) => UnmodifiableListView(json
+            .decode(rawData)
+            .map<Event>((decodedEvent) => Event.fromJson(decodedEvent))),
+      );
+    } on MissingPluginException {
+      // Platform handler missing — degrade to N parallel single-calendar
+      // calls so callers don't have to write their own fallback.
+      final List<Result<UnmodifiableListView<Event>>> perCalendar =
+          await Future.wait(calendarIds
+              .map((String id) => retrieveEvents(id, retrieveEventsParams)));
+      final List<Event> merged = <Event>[];
+      for (final Result<UnmodifiableListView<Event>> r in perCalendar) {
+        if (r.isSuccess && r.data != null) merged.addAll(r.data!);
+      }
+      final Result<UnmodifiableListView<Event>> out =
+          Result<UnmodifiableListView<Event>>();
+      out.data = UnmodifiableListView<Event>(merged);
+      return out;
+    }
+  }
+
+  Result<UnmodifiableListView<Event>> _emptyEventsResult() {
+    final Result<UnmodifiableListView<Event>> r =
+        Result<UnmodifiableListView<Event>>();
+    r.data = UnmodifiableListView<Event>(const <Event>[]);
+    return r;
+  }
+
   /// Deletes an event from a calendar. For a recurring event, this will delete all instances of it.\
   /// To delete individual instance of a recurring event, please use [deleteEventInstance()]
   ///

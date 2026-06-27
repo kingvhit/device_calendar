@@ -20,6 +20,7 @@ private const val REQUEST_PERMISSIONS_METHOD = "requestPermissions"
 private const val HAS_PERMISSIONS_METHOD = "hasPermissions"
 private const val RETRIEVE_CALENDARS_METHOD = "retrieveCalendars"
 private const val RETRIEVE_EVENTS_METHOD = "retrieveEvents"
+private const val RETRIEVE_EVENTS_FOR_CALENDARS_METHOD = "retrieveEventsForCalendars"
 private const val DELETE_EVENT_METHOD = "deleteEvent"
 private const val DELETE_EVENT_INSTANCE_METHOD = "deleteEventInstance"
 private const val CREATE_OR_UPDATE_EVENT_METHOD = "createOrUpdateEvent"
@@ -28,6 +29,7 @@ private const val DELETE_CALENDAR_METHOD = "deleteCalendar"
 
 // Method arguments
 private const val CALENDAR_ID_ARGUMENT = "calendarId"
+private const val CALENDAR_IDS_ARGUMENT = "calendarIds"
 private const val CALENDAR_NAME_ARGUMENT = "calendarName"
 private const val START_DATE_ARGUMENT = "startDate"
 private const val END_DATE_ARGUMENT = "endDate"
@@ -130,6 +132,16 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 val endDate = call.argument<Long>(END_DATE_ARGUMENT)
                 val eventIds = call.argument<List<String>>(EVENT_IDS_ARGUMENT) ?: listOf()
                 _calendarDelegate.retrieveEvents(calendarId!!, startDate, endDate, eventIds, result)
+            }
+
+            // Batched multi-calendar variant — added by the app fork for swipe
+            // perf. Single content-provider query instead of N parallel ones.
+            RETRIEVE_EVENTS_FOR_CALENDARS_METHOD -> {
+                val calendarIds = call.argument<List<String>>(CALENDAR_IDS_ARGUMENT) ?: listOf()
+                val startDate = call.argument<Long>(START_DATE_ARGUMENT)
+                val endDate = call.argument<Long>(END_DATE_ARGUMENT)
+                val eventIds = call.argument<List<String>>(EVENT_IDS_ARGUMENT) ?: listOf()
+                _calendarDelegate.retrieveEventsForCalendars(calendarIds, startDate, endDate, eventIds, result)
             }
 
             CREATE_OR_UPDATE_EVENT_METHOD -> {

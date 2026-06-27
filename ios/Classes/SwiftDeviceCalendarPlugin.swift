@@ -115,6 +115,10 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
     let hasPermissionsMethod = "hasPermissions"
     let retrieveCalendarsMethod = "retrieveCalendars"
     let retrieveEventsMethod = "retrieveEvents"
+    /// Batched multi-calendar variant — added by the app fork for swipe perf.
+    /// Single `EKPredicate` with an array of calendars instead of N parallel
+    /// single-calendar predicates.
+    let retrieveEventsForCalendarsMethod = "retrieveEventsForCalendars"
     let retrieveSourcesMethod = "retrieveSources"
     let createOrUpdateEventMethod = "createOrUpdateEvent"
     let createCalendarMethod = "createCalendar"
@@ -123,6 +127,7 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
     let deleteEventInstanceMethod = "deleteEventInstance"
     let showEventModalMethod = "showiOSEventModal"
     let calendarIdArgument = "calendarId"
+    let calendarIdsArgument = "calendarIds"
     let startDateArgument = "startDate"
     let endDateArgument = "endDate"
     let eventIdArgument = "eventId"
@@ -180,6 +185,8 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
                 retrieveCalendars(result)
             case retrieveEventsMethod:
                 retrieveEvents(call, result)
+            case retrieveEventsForCalendarsMethod:
+                retrieveEventsForCalendars(call, result)
             case createOrUpdateEventMethod:
                 createOrUpdateEvent(call, result)
             case deleteEventMethod:
@@ -393,6 +400,88 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
                 let event = createEventFromEkEvent(calendarId: calendarId, ekEvent: ekEvent!)
 
                 events.append(event)
+            }
+
+            self.encodeJsonAndFinish(codable: events, result: result)
+        }, result: result)
+    }
+
+    /// Batched multi-calendar event read.
+    ///
+    /// EventKit natively supports multi-calendar predicates via
+    /// `predicateForEvents(withStart:end:calendars: [EKCalendar])`. The
+    /// per-calendar `retrieveEvents` above was just passing
+    /// `calendars: [oneCalendar]` — a single-element array. This method
+    /// resolves *all* requested calendars up front and passes them as one
+    /// array, letting EventKit do its own batched indexing inside.
+    ///
+    /// Each returned event's `calendarId` is set from the matched `EKCalendar`
+    /// so the Dart caller can attribute results back to source.
+    private func retrieveEventsForCalendars(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+        checkPermissionsThenExecute(permissionsGrantedAction: {
+            let arguments = call.arguments as! Dictionary<String, AnyObject>
+            let calendarIds = arguments[self.calendarIdsArgument] as? [String] ?? []
+            let startDateMs = arguments[self.startDateArgument] as? NSNumber
+            let endDateMs = arguments[self.endDateArgument] as? NSNumber
+            let eventIdArgs = arguments[self.eventIdsArgument] as? [String]
+
+            if calendarIds.isEmpty {
+                self.encodeJsonAndFinish(codable: [Event](), result: result)
+                return
+            }
+
+            // Resolve EKCalendar objects. Drop unknown IDs silently — same
+            // behaviour as the single-calendar method when a stale id is passed.
+            let ekCalendars: [EKCalendar] = calendarIds.compactMap {
+                self.eventStore.calendar(withIdentifier: $0)
+            }
+            if ekCalendars.isEmpty {
+                self.encodeJsonAndFinish(codable: [Event](), result: result)
+                return
+            }
+
+            var events = [Event]()
+            let specifiedStartEndDates = startDateMs != nil && endDateMs != nil
+
+            if specifiedStartEndDates {
+                let startDate = Date(timeIntervalSince1970: startDateMs!.doubleValue / 1000.0)
+                let endDate = Date(timeIntervalSince1970: endDateMs!.doubleValue / 1000.0)
+
+                // Same 4-year-chunk pattern as `retrieveEvents` — EventKit's
+                // predicate fails on intervals > 4y on some iOS versions.
+                let fourYearsInSeconds: TimeInterval = TimeInterval(4 * 365 * 24 * 60 * 60)
+                var currentStart = startDate
+                var currentEnd = startDate.addingTimeInterval(fourYearsInSeconds)
+                var ekEvents = [EKEvent]()
+                while currentEnd <= endDate {
+                    let predicate = self.eventStore.predicateForEvents(
+                        withStart: currentStart,
+                        end: currentEnd.addingTimeInterval(-1),
+                        calendars: ekCalendars)
+                    ekEvents.append(contentsOf: self.eventStore.events(matching: predicate))
+                    currentStart = currentEnd
+                    currentEnd = currentStart.addingTimeInterval(fourYearsInSeconds)
+                }
+                if currentStart <= endDate {
+                    let predicate = self.eventStore.predicateForEvents(
+                        withStart: currentStart,
+                        end: endDate,
+                        calendars: ekCalendars)
+                    ekEvents.append(contentsOf: self.eventStore.events(matching: predicate))
+                }
+
+                for ekEvent in ekEvents {
+                    // Use the event's own calendar identifier — events from a
+                    // multi-calendar predicate carry the right back-reference.
+                    let cid = ekEvent.calendar.calendarIdentifier
+                    events.append(self.createEventFromEkEvent(calendarId: cid, ekEvent: ekEvent))
+                }
+            }
+
+            // Optional eventIds filter (same semantic as the per-calendar
+            // version — when specified, restrict to those IDs).
+            if let eventIds = eventIdArgs, !eventIds.isEmpty {
+                events = events.filter { eventIds.contains($0.eventId) }
             }
 
             self.encodeJsonAndFinish(codable: events, result: result)
