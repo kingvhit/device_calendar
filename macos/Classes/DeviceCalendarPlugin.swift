@@ -1037,17 +1037,28 @@ public class DeviceCalendarPlugin: NSObject, FlutterPlugin  {
 
     private func hasEventPermissions() -> Bool {
         let status = EKEventStore.authorizationStatus(for: .event)
-        return status == EKAuthorizationStatus.authorized
+        if #available(macOS 14, *) {
+            return status == EKAuthorizationStatus.fullAccess
+        } else {
+            return status == EKAuthorizationStatus.authorized
+        }
     }
 
     private func requestPermissions(_ result: @escaping FlutterResult) {
-        if hasEventPermissions()  {
+        if hasEventPermissions() {
             result(true)
+            return
         }
-        eventStore.requestAccess(to: .event, completion: {
-            (accessGranted: Bool, _: Error?) in
-            result(accessGranted)
-        })
+        if #available(macOS 14, *) {
+            eventStore.requestFullAccessToEvents { (accessGranted: Bool, _: Error?) in
+                result(accessGranted)
+            }
+        } else {
+            eventStore.requestAccess(to: .event, completion: {
+                (accessGranted: Bool, _: Error?) in
+                result(accessGranted)
+            })
+        }
     }
 }
 

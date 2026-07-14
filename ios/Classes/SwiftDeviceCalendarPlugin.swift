@@ -1187,21 +1187,33 @@ extension Date {
 
 extension UIColor {
     func rgb() -> Int? {
+        // EventKit stores colours in the display's native colour space (Display P3
+        // on iPhone 7+). getRed:green:blue:alpha: returns components in that space,
+        // so without an explicit conversion to sRGB the integers sent to Dart differ
+        // from the sRGB values stored by Android's CalendarContract — same calendar,
+        // visibly different colour on each platform.
+        let srgbSelf: UIColor
+        if let srgbSpace = CGColorSpace(name: CGColorSpace.sRGB),
+           let converted = self.cgColor.converted(to: srgbSpace, intent: .defaultIntent, options: nil) {
+            srgbSelf = UIColor(cgColor: converted)
+        } else {
+            srgbSelf = self
+        }
+
         var fRed : CGFloat = 0
         var fGreen : CGFloat = 0
         var fBlue : CGFloat = 0
         var fAlpha: CGFloat = 0
-        if self.getRed(&fRed, green: &fGreen, blue: &fBlue, alpha: &fAlpha) {
-            let iRed = Int(fRed * 255.0)
-            let iGreen = Int(fGreen * 255.0)
-            let iBlue = Int(fBlue * 255.0)
-            let iAlpha = Int(fAlpha * 255.0)
+        if srgbSelf.getRed(&fRed, green: &fGreen, blue: &fBlue, alpha: &fAlpha) {
+            let iRed   = Int((fRed   * 255.0).rounded())
+            let iGreen = Int((fGreen * 255.0).rounded())
+            let iBlue  = Int((fBlue  * 255.0).rounded())
+            let iAlpha = Int((fAlpha * 255.0).rounded())
 
             //  (Bits 24-31 are alpha, 16-23 are red, 8-15 are green, 0-7 are blue).
             let rgb = (iAlpha << 24) + (iRed << 16) + (iGreen << 8) + iBlue
             return rgb
         } else {
-            // Could not extract RGBA components:
             return nil
         }
     }
